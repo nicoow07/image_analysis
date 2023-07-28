@@ -83,8 +83,9 @@ def receive_image():
 	print("Image shape: " + str(hsv.shape))
 	valueChannel = hsv[:,:,2]
 
-	#Calc the histogram
+	#Calc the histogram.
 	hist = cv2.calcHist([valueChannel], [0], None, [256], [0, 256])
+	# Compute a single threshold value based on the histogram
 	localMinIndices = argrelextrema(hist, np.less)
 	minValues = hist[localMinIndices]
 	minValues = np.delete(minValues, np.where(minValues <=  100.0))# Remove minimums with too few pixel occurence
