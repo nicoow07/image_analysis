@@ -52,7 +52,6 @@ def getDenoisedContours(binaryImage, minObjectSurface, maxObjectSurface):
 	lowerSurfacesFilterArray = (surfaces <= maxObjectSurface)
 	filterArray = higherSurfacesFilterArray & lowerSurfacesFilterArray
 	filteredContours = orderedContours[filterArray]
-	print("Number of contour after filtering: " + str(len(filteredContours)))
 	return filteredContours
 
 
@@ -86,36 +85,54 @@ def receive_image():
 	#Calc the histogram.
 	hist = cv2.calcHist([valueChannel], [0], None, [256], [0, 256])
 	# Compute a single threshold value based on the histogram
-	localMinIndices = argrelextrema(hist, np.less)
-	minValues = hist[localMinIndices]
-	minValues = np.delete(minValues, np.where(minValues <=  100.0))# Remove minimums with too few pixel occurence
-	print("Locals min: " + str(minValues))
-	#indexOfLowestValueMinimum = np.argmin(minValues, axis=0)# Index of the minimun which has the lowest value in the histogram
-	lowestMinValue = np.min(minValues)
-	#lowestMinValue = minValues[1]
-	thresholdVals = np.where(hist == lowestMinValue)
-	print("thresholds: " + str(thresholdVals))
-	thresholdVal = thresholdVals[0][0]
-	print("lowestMin value: " + str(lowestMinValue))
+	localMinIndices = argrelextrema(hist, np.less)[0]
+	print("Locals min: " + str(localMinIndices))
 
 	# NEXT STEP: ADJUST THRESHOLD VALUE BASED ON THE AVG BRIGHNESS OF THE IMAGE / HISTOGRAM DECILE
 
+	# Assess the number of objects contoured with all minima of histogram as thresholds
+	# Stop iterating when the number of objects starts to decline. Assumption: it will only decline from there on
+	objectsDetectedByThreshold = list()
+	ind = 0
+	lastNbrObjectsDetected = 0
+	currentNbrObjectsDetected = 0
+	while ind < len(localMinIndices) and lastNbrObjectsDetected <= currentNbrObjectsDetected:
+		thresholdVal = localMinIndices[ind]
+		# Threshold the value chanel
+		larvaeThresh = threshold(valueChannel, thresholdVal)
+
+		# Remove noise, and get contours of only relevant objects (which surface is larger than MINIMUM_SURFACE_FILTER)
+		cleanedLarvaeContours = getDenoisedContours(larvaeThresh, MINIMUM_SURFACE_FILTER, MAXIMUM_SURFACE_FILTER)
+
+		# update last nbr of detected objects
+		lastNbrObjectsDetected = currentNbrObjectsDetected
+		# Get current number of detected objects
+		currentNbrObjectsDetected = len(cleanedLarvaeContours)
+		objectsDetectedByThreshold.append(currentNbrObjectsDetected)
+		ind = ind + 1
+
+	print("Objects for each thresholds: " + str(objectsDetectedByThreshold))
+
+	bestThreshold = localMinIndices[np.argmax(objectsDetectedByThreshold)]
+	print("Best threshold: " + str(bestThreshold))
+
+	#get again contour with the best threshold
 	# Threshold the value chanel
-	larvaeThresh = threshold(valueChannel, thresholdVal)
+	larvaeThresh = threshold(valueChannel, bestThreshold)
 
 	# Remove noise, and get contours of only relevant objects (which surface is larger than MINIMUM_SURFACE_FILTER)
 	cleanedLarvaeContours = getDenoisedContours(larvaeThresh, MINIMUM_SURFACE_FILTER, MAXIMUM_SURFACE_FILTER)
 
-	# Get timestamp
-	# ct stores current time
+
+	# Get timestamp for pict names & logs
 	ct = datetime.datetime.now()
 	
 	if len(cleanedLarvaeContours) > 0:
 		# Display cleaned contours in Green
 		cv2.drawContours(image, cleanedLarvaeContours, -1, (0, 255, 0), 2)
 		surfaceAreaList = list(map(lambda x: cv2.contourArea(x), cleanedLarvaeContours))
-		print("surfaceAreaList")
-		print(surfaceAreaList)
+		#print("surfaceAreaList")
+		#print(surfaceAreaList)
 		avgSurface = np.mean(surfaceAreaList)
 		print("Average surface (px): " + str(avgSurface))
 
@@ -124,9 +141,9 @@ def receive_image():
 		# Get weight from contours
 		weightList = list(map(lambda x: SURFACIQUE_WEIGHT*x + Y_INTERCEPT, surfaceAreaList))
 		avgWeight = np.mean(weightList)
-		print("weightList")
-		print(weightList)
-		print("Average weight: " + str(avgWeight) + " g")
+		#print("weightList")
+		#print(weightList)
+		#print("Average weight: " + str(avgWeight) + " g")
 
 		#Output logs in file
 		logsFile = open(LOG_FILE_NAME, "a")
