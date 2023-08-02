@@ -4,20 +4,23 @@ import numpy as np
 import scipy
 from scipy.signal import argrelextrema
 import cv2
+import csv
+import json
 import time
 import datetime
 
 # OPENCV IMAGE PROCESSING
 THRESHOLD_VALUE = 135
-MINIMUM_SURFACE_FILTER = 100
-MAXIMUM_SURFACE_FILTER = 300
+MIN_THRESHOLD_ITERATION_SPACE = 20
+MINIMUM_SURFACE_FILTER = 300
+MAXIMUM_SURFACE_FILTER = 900
 # Surface - Weight model
 SURFACIQUE_WEIGHT = 1.93
 Y_INTERCEPT = 30.52
 # Logs
-LOG_FILE_NAME = "logs.txt"
+LOG_FILE_NAME = "logs"
 IMAGE_FOLDER = "img"
-MAX_CAPTURE_SAVE = 30 # Save the latest 30 pictures 
+MAX_CAPTURE_SAVE = 100 # Save the latest pictures 
 captureSaveCount = 1 # current count for file name and log matching
 
 # Thresholding. Takes as input a single channel image
@@ -86,10 +89,19 @@ def receive_image():
 	hist = cv2.calcHist([valueChannel], [0], None, [256], [0, 256])
 	# Compute a single threshold value based on the histogram
 	localMinIndices = argrelextrema(hist, np.less)[0]
-	print("Locals min: " + str(localMinIndices))
 
-	# NEXT STEP: ADJUST THRESHOLD VALUE BASED ON THE AVG BRIGHNESS OF THE IMAGE / HISTOGRAM DECILE
+	# Remove some local min if too close together
+	localMinIndicesCpy = localMinIndices.copy()
+	prevMinValue = localMinIndices[0]
+	for minVal in localMinIndicesCpy[1:-1]:
+		if minVal - prevMinValue < MIN_THRESHOLD_ITERATION_SPACE:
+			localMinIndices = np.delete(localMinIndices,np.where(localMinIndices == minVal))
+		else:# Only update previous value if it is left in the array
+			prevMinValue = minVal
 
+	print("Local min after filtering: " + str(localMinIndices))
+
+	# BEST THRESHOLD ASSESSMENT
 	# Assess the number of objects contoured with all minima of histogram as thresholds
 	# Stop iterating when the number of objects starts to decline. Assumption: it will only decline from there on
 	objectsDetectedByThreshold = list()
@@ -112,8 +124,9 @@ def receive_image():
 		ind = ind + 1
 
 	print("Objects for each thresholds: " + str(objectsDetectedByThreshold))
-
-	bestThreshold = localMinIndices[np.argmax(objectsDetectedByThreshold)]
+	bestThreshold = 0
+	if len(objectsDetectedByThreshold) > 0:
+		bestThreshold = localMinIndices[np.argmax(objectsDetectedByThreshold)]
 	print("Best threshold: " + str(bestThreshold))
 
 	#get again contour with the best threshold
@@ -146,10 +159,15 @@ def receive_image():
 		#print("Average weight: " + str(avgWeight) + " g")
 
 		#Output logs in file
-		logsFile = open(LOG_FILE_NAME, "a")
-		logsFile.write(str(ct) + "-" + str(captureSaveCount) + "-surface_list: " + str(surfaceAreaList) + "\n")
-		logsFile.write(str(ct) + "-" + str(captureSaveCount) + "-weight_list: " + str(weightList) + "\n")
+		logsFile = open(LOG_FILE_NAME + ".txt", "a")
+		logsFile.write(str(ct) + "-" + str(captureSaveCount) + "-average_surface: " + str(avgSurface) + "\n")
 		logsFile.write(str(ct) + "-" + str(captureSaveCount) + "-average_weight: " + str(avgWeight) + "\n\n")
+
+		# Output logs in CSV
+		outputCSVFile = open(LOG_FILE_NAME + ".csv", 'a')
+		outputWriter = csv.writer(outputCSVFile)
+		row = [str(captureSaveCount), str(ct), str(avgSurface), str(avgWeight)]
+		outputWriter.writerow(row)
 
 	else:
 		print("Empty contour list")
