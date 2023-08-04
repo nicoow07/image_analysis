@@ -1,0 +1,17 @@
+{
+	"img_processing": {
+		"histogram_min_iteration_span": 20,
+		"minimum_surface_filter": 300,
+		"maximum_surface_filter": 1000,
+		"max_roughness_value": 1.18
+	},
+	"weight_model":{
+		"area_weight": 1.93,
+		"y_intercept": 30.52
+	},
+	"logs":{
+		"log_file_name": "logs",
+		"image_folder": "img",
+		"max_capture_save": 100
+	}
+} 

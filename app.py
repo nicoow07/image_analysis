@@ -80,7 +80,7 @@ def loadConfig(configFileName):
 		MAX_CAPTURE_SAVE = int(config['logs']['max_capture_save'])
 # --- end of loadConfig() ---
 
-loadConfig("config.json")
+loadConfig("config/analysis_config.json")
 
 app = Flask(__name__)
 
