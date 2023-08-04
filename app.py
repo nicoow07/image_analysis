@@ -7,13 +7,14 @@ import cv2
 import csv
 import json
 import time
+import sys
 import datetime
 
 # OPENCV IMAGE PROCESSING
-THRESHOLD_VALUE = 135
 MIN_THRESHOLD_ITERATION_SPACE = 20
 MINIMUM_SURFACE_FILTER = 300
-MAXIMUM_SURFACE_FILTER = 900
+MAXIMUM_SURFACE_FILTER = 1000
+MAX_ROUGHNESS_VALUE = 1.18
 # Surface - Weight model
 SURFACIQUE_WEIGHT = 1.93
 Y_INTERCEPT = 30.52
@@ -21,6 +22,8 @@ Y_INTERCEPT = 30.52
 LOG_FILE_NAME = "logs"
 IMAGE_FOLDER = "img"
 MAX_CAPTURE_SAVE = 100 # Save the latest pictures 
+
+# Global variable to record the current id of image stored on disk.
 captureSaveCount = 1 # current count for file name and log matching
 
 # Thresholding. Takes as input a single channel image
@@ -57,6 +60,27 @@ def getDenoisedContours(binaryImage, minObjectSurface, maxObjectSurface):
 	filteredContours = orderedContours[filterArray]
 	return filteredContours
 
+def loadConfig(configFileName):
+	print("Loading config file: " + configFileName)
+	# Load config file
+	with open(configFileName) as f:
+		config = json.load(f)
+
+		# OPENCV IMAGE PROCESSING
+		MIN_THRESHOLD_ITERATION_SPACE = int(config['img_processing']['histogram_min_iteration_span'])
+		MINIMUM_SURFACE_FILTER = int(config['img_processing']['minimum_surface_filter'])
+		MAXIMUM_SURFACE_FILTER = int(config['img_processing']['maximum_surface_filter'])
+		MAX_ROUGHNESS_VALUE = float(config['img_processing']['max_roughness_value'])
+		# Surface - Weight model
+		AREA_WEIGHT = float(config['weight_model']['area_weight'])
+		Y_INTERCEPT = float(config['weight_model']['y_intercept'])
+		# Logs
+		LOG_FILE_NAME = str(config['logs']['log_file_name'])
+		IMAGE_FOLDER = str(config['logs']['image_folder'])
+		MAX_CAPTURE_SAVE = int(config['logs']['max_capture_save'])
+# --- end of loadConfig() ---
+
+loadConfig("config.json")
 
 app = Flask(__name__)
 
@@ -64,7 +88,6 @@ app = Flask(__name__)
 def receive_image():
 	global captureSaveCount
 	#=====IMAGE RECEPTION=====
-	print(request.headers)
 	if not request.files:
 		return "No image received"
 	file = request.files['image']
@@ -141,6 +164,29 @@ def receive_image():
 	ct = datetime.datetime.now()
 	
 	if len(cleanedLarvaeContours) > 0:
+		# Filter contours based on Roughness
+		contourRoughnessList = []
+		for contour in cleanedLarvaeContours:
+			perimeter = cv2.arcLength(contour, True)
+			cvxHull = cv2.convexHull(contour)
+			cvxHullPerimeter = cv2.arcLength(cvxHull, True)
+			roughness = round(perimeter / cvxHullPerimeter, 2)
+			contourRoughnessList.append(roughness)
+			# Display roughness next to the larvae concerned
+			if roughness > MAX_ROUGHNESS_VALUE:
+				(x, y, w, h) = cv2.boundingRect(contour)
+				cv2.putText(image, "Rg: " + str(roughness), (x, y - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+				cv2.drawContours(image, cleanedLarvaeContours, -1, (0, 0, 255), 2)
+
+		contourRoughnessList = np.array(contourRoughnessList)
+
+		# Remove all contours with a roughness above the maximum = filter value
+		cleanedLarvaeContours = cleanedLarvaeContours[contourRoughnessList <= MAX_ROUGHNESS_VALUE]
+		
+		# Try filtering based on convexity defects
+
+	# Check again that some contours are left after filtering
+	if len(cleanedLarvaeContours) > 0:
 		# Display cleaned contours in Green
 		cv2.drawContours(image, cleanedLarvaeContours, -1, (0, 255, 0), 2)
 		surfaceAreaList = list(map(lambda x: cv2.contourArea(x), cleanedLarvaeContours))
@@ -182,8 +228,4 @@ def receive_image():
 	endTime = time.time()
 	print("Processing time: " + str(endTime-startTime))
 	
-	return "yo"
-
-@app.route('/', methods = ['GET'])
-def sayHi():
-	return "Helloow"
+	return "200Ok"
