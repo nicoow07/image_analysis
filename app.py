@@ -203,11 +203,19 @@ def process_image():
 	ind = 0
 	lastNbrObjectsDetected = 0
 	currentNbrObjectsDetected = 0
-	while ind < len(localMinIndices) and lastNbrObjectsDetected <= currentNbrObjectsDetected:
+	backgroundHSVLowRange = np.array([0, 60, 100])
+	backgroundHSVHighRange = np.array([0, 155, 255])
+	print("Thresholds to try: " + str(localMinIndices))
+	# Shortcut the number of threshold to try only when speed is needed: when calibration is direct (meaning free falling larvae)
+	# when CALIBRATION == "benchmark", no shortcut: 
+	while ind < len(localMinIndices) and (lastNbrObjectsDetected <= currentNbrObjectsDetected or CALIBRATION == "benchmark"):
 	#while ind < len(localMinIndices):
 		thresholdVal = localMinIndices[ind]
-		# Threshold the value chanel
-		larvaeThresh = threshold(valueChannel, thresholdVal)
+		
+		# Threshold the value channel with a window of 30 around the above threshold value
+		backgroundHSVLowRange[0] = max(thresholdVal-15, 0)
+		backgroundHSVHighRange[0] = min(thresholdVal+15, 255)
+		larvaeThresh = hsvThreshold(hsv, backgroundHSVLowRange, backgroundHSVHighRange)
 
 		# Remove noise, and get contours of only relevant objects (which surface is larger than MINIMUM_SURFACE_FILTER)
 		cleanedLarvaeContours = getDenoisedContours(larvaeThresh, MINIMUM_SURFACE_FILTER, MAXIMUM_SURFACE_FILTER)
@@ -217,6 +225,7 @@ def process_image():
 		# Get current number of detected objects
 		currentNbrObjectsDetected = len(cleanedLarvaeContours)
 		objectsDetectedByThreshold.append(currentNbrObjectsDetected)
+		print(str(currentNbrObjectsDetected) + " objects detected with threshold " + str(thresholdVal))
 		ind = ind + 1
 
 	# Compute best threshold value
@@ -225,8 +234,11 @@ def process_image():
 		bestThreshold = localMinIndices[np.argmax(objectsDetectedByThreshold)]
 	print("Best threshold: " + str(bestThreshold))
 
-	# Threshold the value chanel of HSV image with best threshold value
-	larvaeThresh = threshold(valueChannel, bestThreshold)
+	# Threshold the value chanel of HSV image with best threshold hue value
+	backgroundHSVLowRange[0] = max(bestThreshold-15, 0)
+	backgroundHSVHighRange[0] = min(bestThreshold+15, 255)
+	larvaeThresh = hsvThreshold(hsv, backgroundHSVLowRange, backgroundHSVHighRange)
+
 	# Get again contour with the best threshold
 	cleanedLarvaeContours = getDenoisedContours(larvaeThresh, MINIMUM_SURFACE_FILTER, MAXIMUM_SURFACE_FILTER)
 

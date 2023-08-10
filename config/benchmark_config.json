@@ -1,8 +1,8 @@
 {
 	"img_processing": {
-		"histogram_min_iteration_span": 40,
-		"minimum_surface_filter": 300,
-		"maximum_surface_filter": 1000,
+		"histogram_min_iteration_span": 15,
+		"minimum_surface_filter": 50,
+		"maximum_surface_filter": 300,
 		"max_roughness_value": 1.18,
 		"min_larvae_to_detect": 0
 	},
