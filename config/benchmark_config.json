@@ -4,7 +4,7 @@
 		"minimum_surface_filter": 300,
 		"maximum_surface_filter": 1000,
 		"max_roughness_value": 1.18,
-		"min_larvae_to_detect": 4
+		"min_larvae_to_detect": 0
 	},
 	"weight_model":{
 		"calibration": "benchmark",

@@ -42,7 +42,14 @@ def threshold(singleChannelImage, threshold):
 	mask = np.where(foreground==0,255,0).astype(np.uint8) # Invert foreground to get background in uint8
 	return mask
 
-# Takes as input a binary image (a mask), and remove all objects whose surface area is smaller than minObjectSurface
+#Takes two HSV points for low and high range of the accepted colors. All points in this range of color are output with value 255 (white), the others are output with value 0 (black) 
+def hsvThreshold(hsv, lowHSVRange, highHSVRange):
+	object_color_range = [lowHSVRange, highHSVRange]
+	thresh = cv2.inRange(hsv, object_color_range[0], object_color_range[1])
+	return thresh
+
+
+# Takes as input a binary image (a mask), and remove all objects whose surface area is smaller than minObjectSurface, and larger than maxObjectSurface
 # Returns a binary image of the same size as the input image
 def getDenoisedContours(binaryImage, minObjectSurface, maxObjectSurface):
 	# Find contours
@@ -68,12 +75,9 @@ def getDenoisedContours(binaryImage, minObjectSurface, maxObjectSurface):
 # Returns the nbr of pixels corresponding to the benchmark on the picture (for instance a red strip of paper of 5cm)
 # Returns -1 of no benchmark found
 def get_benchmark_length(image, hsv):
-	#hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-	# Filter red color because the benchmark is a red paper strip
-	red_benchmark_low_color_range = [np.array([150, 60, 100]), np.array([180, 255, 255])]
-	red_benchmark_high_color_range = [np.array([0, 60, 100]), np.array([30, 255, 255])]
-	low_red_thresh = cv2.inRange(hsv, red_benchmark_low_color_range[0], red_benchmark_low_color_range[1])
-	high_red_thresh = cv2.inRange(hsv, red_benchmark_high_color_range[0], red_benchmark_high_color_range[1])
+	# Filter RED color because the benchmark is a red paper strip
+	low_red_thresh = hsvThreshold(hsv, np.array([150, 60, 100]), np.array([180, 255, 255]))
+	high_red_thresh = hsvThreshold(hsv, np.array([0, 60, 100]), np.array([30, 255, 255]))
 	thresh = cv2.bitwise_or(low_red_thresh, high_red_thresh)
 
 	# Find contours in the binary image
@@ -82,7 +86,7 @@ def get_benchmark_length(image, hsv):
 
 	# If no benchmark found on the image, return -1
 	if len(contours) <= 0:
-		cv2.putText(image, "No benchmark found", (20, 20 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+		cv2.putText(image, "No benchmark found", (20, 20 ), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 1)
 		return -1
 	# Filter the contours to only keep the largest one
 	largest_contour = max(contours, key=cv2.contourArea)
@@ -100,7 +104,7 @@ def get_benchmark_length(image, hsv):
 	cv2.imwrite(IMAGE_FOLDER + "/" + "thresh-benchmark_img.jpg", thresh)
 
 	length = round(max(w,h),2)
-	cv2.putText(image, "Benchmark: "+str(length)+" px = "+str(BENCHMARK_METRIC_LENGTH)+" mm", (x, y - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+	cv2.putText(image, "Benchmark: "+str(length)+" px = "+str(BENCHMARK_METRIC_LENGTH)+" mm", (x, y - 15), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 1)
 	
 	return length
 
@@ -199,8 +203,8 @@ def process_image():
 	ind = 0
 	lastNbrObjectsDetected = 0
 	currentNbrObjectsDetected = 0
-	#while ind < len(localMinIndices) and lastNbrObjectsDetected <= currentNbrObjectsDetected:
-	while ind < len(localMinIndices):
+	while ind < len(localMinIndices) and lastNbrObjectsDetected <= currentNbrObjectsDetected:
+	#while ind < len(localMinIndices):
 		thresholdVal = localMinIndices[ind]
 		# Threshold the value chanel
 		larvaeThresh = threshold(valueChannel, thresholdVal)
@@ -256,6 +260,9 @@ def process_image():
 	if CALIBRATION == "benchmark":
 		# Get the length of the benchmark in pixels
 		benchmark_length_px = get_benchmark_length(image, hsv)
+		# To avoid division by 0
+		if benchmark_length_px == 0.0:
+			benchmark_length_px = -1
 		print("Benchmark length: " + str(benchmark_length_px))
 
 	# Draw accepted contours in green
@@ -281,9 +288,9 @@ def process_image():
 				surfacePx = pxSurfaceAreaList[i]
 				weight = weightList[i]
 				(xc, yc, wc, hc) = cv2.boundingRect(larva_contour)
-				cv2.putText(image, "Surface: " + str(surfacePx) + " px^2, ", (xc, yc ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-				cv2.putText(image, "Surface: " + str(surfacePx*mmPerPx**2) + " mm^2", (xc, yc-13 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-				cv2.putText(image, "Weight: " + str(weight) + " g", (xc, yc-26 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+				cv2.putText(image, "Surface: " + str(round(surfacePx, 2)) + " px^2, ", (xc, yc ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+				cv2.putText(image, "Surface: " + str(round(surfacePx*mmPerPx**2, 2)) + " mm^2", (xc, yc-13 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+				cv2.putText(image, "Weight: " + str(round(weight, 2)) + " g", (xc, yc-26 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
 
 		# Otherwise, without calibration, the AREA_WEIGHT already includes the conversion from px to mm
@@ -293,8 +300,9 @@ def process_image():
 		# Get avg weight
 		avgWeight = np.mean(weightList)
 
-		# Display info on the image
-		cv2.putText(image, "Average weight " + ("(Calibration=benchmark): " if (CALIBRATION == "benchmark") else "(Calibration=direct): ") + str(round(avgWeight, 2)) + " g", (20, 20 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+		# Display info on the image; avg weight, number of larvae detected
+		cv2.putText(image, "Average weight " + ("(Calibration=benchmark): " if (CALIBRATION == "benchmark") else "(Calibration=direct): ") + str(round(avgWeight, 2)) + " g", (20, 20 ), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1)
+		cv2.putText(image, "Number of larvae identified: " + str(nbrRecognisedLarvae), (20, 40 ), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1)
 
 		# Print info
 		avgSurface = np.mean(pxSurfaceAreaList)
