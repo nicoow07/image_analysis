@@ -8,6 +8,7 @@ import csv
 import json
 import time
 import sys
+import os
 import datetime
 
 # OPENCV IMAGE PROCESSING
@@ -15,8 +16,11 @@ MIN_THRESHOLD_ITERATION_SPACE = 20
 MINIMUM_SURFACE_FILTER = 300
 MAXIMUM_SURFACE_FILTER = 1000
 MAX_ROUGHNESS_VALUE = 1.18
+MIN_LARVAE_TO_DETECT=1
 # Surface - Weight model
-SURFACIQUE_WEIGHT = 1.93
+CALIBRATION = "benchmark"
+BENCHMARK_METRIC_LENGTH = 40
+AREA_WEIGHT = 1.93
 Y_INTERCEPT = 30.52
 # Logs
 LOG_FILE_NAME = "logs"
@@ -60,39 +64,103 @@ def getDenoisedContours(binaryImage, minObjectSurface, maxObjectSurface):
 	filteredContours = orderedContours[filterArray]
 	return filteredContours
 
+# Takes the original image and the hsv image as input
+# Returns the nbr of pixels corresponding to the benchmark on the picture (for instance a red strip of paper of 5cm)
+# Returns -1 of no benchmark found
+def get_benchmark_length(image, hsv):
+	#hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+	# Filter red color because the benchmark is a red paper strip
+	red_benchmark_low_color_range = [np.array([150, 60, 100]), np.array([180, 255, 255])]
+	red_benchmark_high_color_range = [np.array([0, 60, 100]), np.array([30, 255, 255])]
+	low_red_thresh = cv2.inRange(hsv, red_benchmark_low_color_range[0], red_benchmark_low_color_range[1])
+	high_red_thresh = cv2.inRange(hsv, red_benchmark_high_color_range[0], red_benchmark_high_color_range[1])
+	thresh = cv2.bitwise_or(low_red_thresh, high_red_thresh)
+
+	# Find contours in the binary image
+	contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+	
+
+	# If no benchmark found on the image, return -1
+	if len(contours) <= 0:
+		cv2.putText(image, "No benchmark found", (20, 20 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+		return -1
+	# Filter the contours to only keep the largest one
+	largest_contour = max(contours, key=cv2.contourArea)
+
+
+	# Draw contour and add "benchmark" text
+	rect = cv2.minAreaRect(largest_contour)
+
+	# Box object is simply an array of the coordinates of the 4 vertices of the rectangle
+	box = np.int0(cv2.boxPoints(rect))
+	cv2.drawContours(image, [box], 0, (255, 0, 0), 2)
+	# These are the width and height of the rotated bounding rect
+	[w,h] = rect[1]
+	[x,y] = box[0]
+	cv2.imwrite(IMAGE_FOLDER + "/" + "thresh-benchmark_img.jpg", thresh)
+
+	length = round(max(w,h),2)
+	cv2.putText(image, "Benchmark: "+str(length)+" px = "+str(BENCHMARK_METRIC_LENGTH)+" mm", (x, y - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+	
+	return length
+
 def loadConfig(configFileName):
 	print("Loading config file: " + configFileName)
+
+	global MIN_THRESHOLD_ITERATION_SPACE
+	global MINIMUM_SURFACE_FILTER
+	global MAXIMUM_SURFACE_FILTER
+	global MAX_ROUGHNESS_VALUE
+	global MIN_LARVAE_TO_DETECT
+	global CALIBRATION
+	global BENCHMARK_METRIC_LENGTH
+	global AREA_WEIGHT
+	global Y_INTERCEPT
+	global LOG_FILE_NAME
+	global IMAGE_FOLDER
+	global MAX_CAPTURE_SAVE
+
 	# Load config file
-	with open(configFileName) as f:
-		config = json.load(f)
+	try:
+		with open(configFileName) as f:
+			config = json.load(f)
 
-		# OPENCV IMAGE PROCESSING
-		MIN_THRESHOLD_ITERATION_SPACE = int(config['img_processing']['histogram_min_iteration_span'])
-		MINIMUM_SURFACE_FILTER = int(config['img_processing']['minimum_surface_filter'])
-		MAXIMUM_SURFACE_FILTER = int(config['img_processing']['maximum_surface_filter'])
-		MAX_ROUGHNESS_VALUE = float(config['img_processing']['max_roughness_value'])
-		# Surface - Weight model
-		AREA_WEIGHT = float(config['weight_model']['area_weight'])
-		Y_INTERCEPT = float(config['weight_model']['y_intercept'])
-		# Logs
-		LOG_FILE_NAME = str(config['logs']['log_file_name'])
-		IMAGE_FOLDER = str(config['logs']['image_folder'])
-		MAX_CAPTURE_SAVE = int(config['logs']['max_capture_save'])
-# --- end of loadConfig() ---
+			# OPENCV IMAGE PROCESSING
+			MIN_THRESHOLD_ITERATION_SPACE = int(config['img_processing']['histogram_min_iteration_span'])
+			MINIMUM_SURFACE_FILTER = int(config['img_processing']['minimum_surface_filter'])
+			MAXIMUM_SURFACE_FILTER = int(config['img_processing']['maximum_surface_filter'])
+			MAX_ROUGHNESS_VALUE = float(config['img_processing']['max_roughness_value'])
+			MIN_LARVAE_TO_DETECT = int(config['img_processing']['min_larvae_to_detect'])
+			# Surface - Weight model
+			CALIBRATION = str(config['weight_model']['calibration'])
+			BENCHMARK_METRIC_LENGTH = int(config['weight_model']['benchmark_metric_length'])
+			AREA_WEIGHT = float(config['weight_model']['area_weight'])
+			Y_INTERCEPT = float(config['weight_model']['y_intercept'])
+			# Logs
+			LOG_FILE_NAME = str(config['logs']['log_file_name'])
+			IMAGE_FOLDER = str(config['logs']['image_folder'])
+			MAX_CAPTURE_SAVE = int(config['logs']['max_capture_save'])
+			print("Config loaded successfully.")
+	except FileNotFoundError as e:
+		print("Config file not found.")
+		sys.exit(1)
+	except OSError as e:
+		print(e.errno)
+		sys.exit(2)
 
-loadConfig("config/analysis_config.json")
+# Get config file name from the environment variable CONFIG_FILE
+conf_file_name = os.environ.get('CONFIG_FILE')
+loadConfig(conf_file_name)
 
 app = Flask(__name__)
 
 @app.route('/upload_image', methods = ['POST'])
-def receive_image():
+def process_image():
 	global captureSaveCount
 	#=====IMAGE RECEPTION=====
 	if not request.files:
 		return "No image received"
 	file = request.files['image']
-
-
 	# convert string of image data to uint8
 	nparr = np.fromstring(file.read(), np.uint8)
 	# decode image
@@ -112,8 +180,10 @@ def receive_image():
 	hist = cv2.calcHist([valueChannel], [0], None, [256], [0, 256])
 	# Compute a single threshold value based on the histogram
 	localMinIndices = argrelextrema(hist, np.less)[0]
+	if len(localMinIndices) <= 0:
+		return "Flat histogram"
 
-	# Remove some local min if too close together
+	# Remove some local min of the histogram if too close together
 	localMinIndicesCpy = localMinIndices.copy()
 	prevMinValue = localMinIndices[0]
 	for minVal in localMinIndicesCpy[1:-1]:
@@ -122,8 +192,6 @@ def receive_image():
 		else:# Only update previous value if it is left in the array
 			prevMinValue = minVal
 
-	print("Local min after filtering: " + str(localMinIndices))
-
 	# BEST THRESHOLD ASSESSMENT
 	# Assess the number of objects contoured with all minima of histogram as thresholds
 	# Stop iterating when the number of objects starts to decline. Assumption: it will only decline from there on
@@ -131,7 +199,8 @@ def receive_image():
 	ind = 0
 	lastNbrObjectsDetected = 0
 	currentNbrObjectsDetected = 0
-	while ind < len(localMinIndices) and lastNbrObjectsDetected <= currentNbrObjectsDetected:
+	#while ind < len(localMinIndices) and lastNbrObjectsDetected <= currentNbrObjectsDetected:
+	while ind < len(localMinIndices):
 		thresholdVal = localMinIndices[ind]
 		# Threshold the value chanel
 		larvaeThresh = threshold(valueChannel, thresholdVal)
@@ -146,25 +215,24 @@ def receive_image():
 		objectsDetectedByThreshold.append(currentNbrObjectsDetected)
 		ind = ind + 1
 
-	print("Objects for each thresholds: " + str(objectsDetectedByThreshold))
+	# Compute best threshold value
 	bestThreshold = 0
 	if len(objectsDetectedByThreshold) > 0:
 		bestThreshold = localMinIndices[np.argmax(objectsDetectedByThreshold)]
 	print("Best threshold: " + str(bestThreshold))
 
-	#get again contour with the best threshold
-	# Threshold the value chanel
+	# Threshold the value chanel of HSV image with best threshold value
 	larvaeThresh = threshold(valueChannel, bestThreshold)
-
-	# Remove noise, and get contours of only relevant objects (which surface is larger than MINIMUM_SURFACE_FILTER)
+	# Get again contour with the best threshold
 	cleanedLarvaeContours = getDenoisedContours(larvaeThresh, MINIMUM_SURFACE_FILTER, MAXIMUM_SURFACE_FILTER)
 
+	cv2.imwrite(IMAGE_FOLDER + "/" + "larvae_thresh.jpg", larvaeThresh)
 
 	# Get timestamp for pict names & logs
 	ct = datetime.datetime.now()
 	
+	# Filter contours based on Roughness. Draw removed contours in red
 	if len(cleanedLarvaeContours) > 0:
-		# Filter contours based on Roughness
 		contourRoughnessList = []
 		for contour in cleanedLarvaeContours:
 			perimeter = cv2.arcLength(contour, True)
@@ -172,60 +240,99 @@ def receive_image():
 			cvxHullPerimeter = cv2.arcLength(cvxHull, True)
 			roughness = round(perimeter / cvxHullPerimeter, 2)
 			contourRoughnessList.append(roughness)
-			# Display roughness next to the larvae concerned
-			if roughness > MAX_ROUGHNESS_VALUE:
-				(x, y, w, h) = cv2.boundingRect(contour)
-				cv2.putText(image, "Rg: " + str(roughness), (x, y - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-				cv2.drawContours(image, cleanedLarvaeContours, -1, (0, 0, 255), 2)
+			# Display roughness next to the contour concerned
+			# if roughness > MAX_ROUGHNESS_VALUE:
+			# 	(x, y, w, h) = cv2.boundingRect(contour)
+			# 	cv2.putText(image, "Rg: " + str(roughness), (x, y - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+			# 	cv2.drawContours(image, cleanedLarvaeContours, -1, (0, 0, 255), 2)
 
 		contourRoughnessList = np.array(contourRoughnessList)
 
 		# Remove all contours with a roughness above the maximum = filter value
 		cleanedLarvaeContours = cleanedLarvaeContours[contourRoughnessList <= MAX_ROUGHNESS_VALUE]
-		
-		# Try filtering based on convexity defects
 
-	# Check again that some contours are left after filtering
-	if len(cleanedLarvaeContours) > 0:
+	# Benchmark recognition
+	benchmark_length_px = -2 # -2 means calibration is without benchmark. To differentiate from -1 which means "Benchmark not found"
+	if CALIBRATION == "benchmark":
+		# Get the length of the benchmark in pixels
+		benchmark_length_px = get_benchmark_length(image, hsv)
+		print("Benchmark length: " + str(benchmark_length_px))
+
+	# Draw accepted contours in green
+	# Calculate average surface and weight
+	nbrRecognisedLarvae = len(cleanedLarvaeContours)
+	if nbrRecognisedLarvae >= MIN_LARVAE_TO_DETECT:
 		# Display cleaned contours in Green
 		cv2.drawContours(image, cleanedLarvaeContours, -1, (0, 255, 0), 2)
-		surfaceAreaList = list(map(lambda x: cv2.contourArea(x), cleanedLarvaeContours))
-		#print("surfaceAreaList")
-		#print(surfaceAreaList)
-		avgSurface = np.mean(surfaceAreaList)
-		print("Average surface (px): " + str(avgSurface))
+		pxSurfaceAreaList = list(map(lambda x: cv2.contourArea(x), cleanedLarvaeContours))		
 
-		# MISSING PIXEL^2 TO MM^2 CONVERSION
+		# Compute weights
+		weightList = np.array(0)
+		# If benchmark is used, convert surfaces in px^2 into mm^2
+		if CALIBRATION == "benchmark":
+			#  pxSurfaceAreaList elements are in px^2. mmPerPx is in mm / px. x*mmPerPx**2 is in mm^2
+			# AREA_WEIGHT is in mg / mm^2. Y_INTERCEPT is in mg
+			mmPerPx = BENCHMARK_METRIC_LENGTH / benchmark_length_px
+			weightList = list(map(lambda x: AREA_WEIGHT*(x*mmPerPx**2) + Y_INTERCEPT, pxSurfaceAreaList))
 
-		# Get weight from contours
-		weightList = list(map(lambda x: SURFACIQUE_WEIGHT*x + Y_INTERCEPT, surfaceAreaList))
+			# Draw
+			for i in range(0, nbrRecognisedLarvae):
+				larva_contour = cleanedLarvaeContours[i]
+				surfacePx = pxSurfaceAreaList[i]
+				weight = weightList[i]
+				(xc, yc, wc, hc) = cv2.boundingRect(larva_contour)
+				cv2.putText(image, "Surface: " + str(surfacePx) + " px^2, ", (xc, yc ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+				cv2.putText(image, "Surface: " + str(surfacePx*mmPerPx**2) + " mm^2", (xc, yc-13 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+				cv2.putText(image, "Weight: " + str(weight) + " g", (xc, yc-26 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+
+		# Otherwise, without calibration, the AREA_WEIGHT already includes the conversion from px to mm
+		else:
+			weightList = list(map(lambda x: AREA_WEIGHT*x + Y_INTERCEPT, pxSurfaceAreaList))
+
+		# Get avg weight
 		avgWeight = np.mean(weightList)
-		#print("weightList")
-		#print(weightList)
-		#print("Average weight: " + str(avgWeight) + " g")
+
+		# Display info on the image
+		cv2.putText(image, "Average weight " + ("(Calibration=benchmark): " if (CALIBRATION == "benchmark") else "(Calibration=direct): ") + str(round(avgWeight, 2)) + " g", (20, 20 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+		# Print info
+		avgSurface = np.mean(pxSurfaceAreaList)
+		print("Recognised larvae surface list: " + str(pxSurfaceAreaList))
+		print("Recognised larvae weight list: " + str(weightList))
+		print("Number of larvae recognised: " + str(nbrRecognisedLarvae))
+		print("Average surface (px^2): " + str(round(avgSurface,2)))
+		print("Average weight (px^2): " + str(round(avgWeight, 2)))
 
 		#Output logs in file
 		logsFile = open(LOG_FILE_NAME + ".txt", "a")
 		logsFile.write(str(ct) + "-" + str(captureSaveCount) + "-average_surface: " + str(avgSurface) + "\n")
 		logsFile.write(str(ct) + "-" + str(captureSaveCount) + "-average_weight: " + str(avgWeight) + "\n\n")
 
-		# Output logs in CSV
+		# Output logs in CSV, with Benchmark length recognised if selected in config
 		outputCSVFile = open(LOG_FILE_NAME + ".csv", 'a')
 		outputWriter = csv.writer(outputCSVFile)
-		row = [str(captureSaveCount), str(ct), str(avgSurface), str(avgWeight)]
+		if benchmark_length_px == -2:
+			row = [str(captureSaveCount), str(ct), str(avgSurface), 0, str(avgWeight), -2]
+		else:
+			if CALIBRATION == "benchmark":
+				mmPerPx = BENCHMARK_METRIC_LENGTH / benchmark_length_px
+				row = [str(captureSaveCount), str(ct), str(avgSurface), str(avgSurface*mmPerPx**2), str(avgWeight), str(benchmark_length_px)]
+			else:
+				row = [str(captureSaveCount), str(ct), str(avgSurface), 0, str(avgWeight), str(benchmark_length_px)]
 		outputWriter.writerow(row)
 
-	else:
-		print("Empty contour list")
+		# Save image
+		cv2.imwrite(IMAGE_FOLDER + "/" + str(captureSaveCount) + "-contoured_img.jpg", image)
 
-	# Display image
-	cv2.imwrite(IMAGE_FOLDER + "/" + str(captureSaveCount) + "-contoured_img.jpg", image)
+	else:
+		print("Too few larvae detected, minimum is: " + str(MIN_LARVAE_TO_DETECT))
 
 	captureSaveCount = captureSaveCount + 1
 	if captureSaveCount > MAX_CAPTURE_SAVE:
 		captureSaveCount = 1
 	
 	endTime = time.time()
-	print("Processing time: " + str(endTime-startTime))
+	print("Processing time: " + str(endTime-startTime) + "\n")
 	
 	return "200Ok"
