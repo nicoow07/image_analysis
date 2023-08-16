@@ -101,7 +101,7 @@ def get_benchmark_length(image, hsv):
 	# These are the width and height of the rotated bounding rect
 	[w,h] = rect[1]
 	[x,y] = box[0]
-	cv2.imwrite(IMAGE_FOLDER + "/" + "thresh-benchmark_img.jpg", thresh)
+	cv2.imwrite(IMAGE_FOLDER + "/" + str(captureSaveCount) + "-thresh_benchmark.jpg", thresh)
 
 	length = round(max(w,h),2)
 	cv2.putText(image, "Benchmark: "+str(length)+" px = "+str(BENCHMARK_METRIC_LENGTH)+" mm", (x, y - 15), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 1)
@@ -145,6 +145,7 @@ def loadConfig(configFileName):
 			IMAGE_FOLDER = str(config['logs']['image_folder'])
 			MAX_CAPTURE_SAVE = int(config['logs']['max_capture_save'])
 			print("Config loaded successfully.")
+			print(str(config))
 	except FileNotFoundError as e:
 		print("Config file not found.")
 		sys.exit(1)
@@ -180,6 +181,23 @@ def process_image():
 	print("Image shape: " + str(hsv.shape))
 	valueChannel = hsv[:,:,2]
 
+	# Benchmark recognition
+	benchmark_length_px = -2 # -2 means calibration is without benchmark. To differentiate from -1 which means "Benchmark not found"
+	if CALIBRATION == "benchmark":
+		# Get the length of the benchmark in pixels
+		benchmark_length_px = get_benchmark_length(image, hsv)
+		# To avoid division by 0
+		if benchmark_length_px == 0.0:
+			benchmark_length_px = -1
+		print("Benchmark length: " + str(benchmark_length_px) + " px")
+
+		# For benchmark use case, convert min&max_surface_filter from mm^2 to pixels^2 thanks to the benchmark recognised above
+		pxPerMm = benchmark_length_px / BENCHMARK_METRIC_LENGTH
+		global MINIMUM_SURFACE_FILTER
+		global MAXIMUM_SURFACE_FILTER
+		MINIMUM_SURFACE_FILTER = MINIMUM_SURFACE_FILTER * pxPerMm**2
+		MAXIMUM_SURFACE_FILTER = MAXIMUM_SURFACE_FILTER * pxPerMm**2
+
 	#Calc the histogram.
 	hist = cv2.calcHist([valueChannel], [0], None, [256], [0, 256])
 	# Compute a single threshold value based on the histogram
@@ -204,7 +222,7 @@ def process_image():
 	lastNbrObjectsDetected = 0
 	currentNbrObjectsDetected = 0
 	backgroundHSVLowRange = np.array([0, 60, 100])
-	backgroundHSVHighRange = np.array([0, 155, 255])
+	backgroundHSVHighRange = np.array([255, 155, 255])
 	print("Thresholds to try: " + str(localMinIndices))
 	# Shortcut the number of threshold to try only when speed is needed: when calibration is direct (meaning free falling larvae)
 	# when CALIBRATION == "benchmark", no shortcut: 
@@ -225,7 +243,7 @@ def process_image():
 		# Get current number of detected objects
 		currentNbrObjectsDetected = len(cleanedLarvaeContours)
 		objectsDetectedByThreshold.append(currentNbrObjectsDetected)
-		print(str(currentNbrObjectsDetected) + " objects detected with threshold " + str(thresholdVal))
+		#print(str(currentNbrObjectsDetected) + " objects detected with threshold " + str(thresholdVal))
 		ind = ind + 1
 
 	# Compute best threshold value
@@ -238,17 +256,19 @@ def process_image():
 	backgroundHSVLowRange[0] = max(bestThreshold-15, 0)
 	backgroundHSVHighRange[0] = min(bestThreshold+15, 255)
 	larvaeThresh = hsvThreshold(hsv, backgroundHSVLowRange, backgroundHSVHighRange)
+	#larvaeThresh = threshold(valueChannel, bestThreshold)
 
 	# Get again contour with the best threshold
 	cleanedLarvaeContours = getDenoisedContours(larvaeThresh, MINIMUM_SURFACE_FILTER, MAXIMUM_SURFACE_FILTER)
 
-	cv2.imwrite(IMAGE_FOLDER + "/" + "larvae_thresh.jpg", larvaeThresh)
+	cv2.imwrite(IMAGE_FOLDER + "/" + str(captureSaveCount) + "-larvae_thresh.jpg", larvaeThresh)
 
 	# Get timestamp for pict names & logs
 	ct = datetime.datetime.now()
 	
 	# Filter contours based on Roughness. Draw removed contours in red
-	if len(cleanedLarvaeContours) > 0:
+	nbrRecognisedLarvae = len(cleanedLarvaeContours)
+	if nbrRecognisedLarvae > 0:
 		contourRoughnessList = []
 		for contour in cleanedLarvaeContours:
 			perimeter = cv2.arcLength(contour, True)
@@ -267,18 +287,9 @@ def process_image():
 		# Remove all contours with a roughness above the maximum = filter value
 		cleanedLarvaeContours = cleanedLarvaeContours[contourRoughnessList <= MAX_ROUGHNESS_VALUE]
 
-	# Benchmark recognition
-	benchmark_length_px = -2 # -2 means calibration is without benchmark. To differentiate from -1 which means "Benchmark not found"
-	if CALIBRATION == "benchmark":
-		# Get the length of the benchmark in pixels
-		benchmark_length_px = get_benchmark_length(image, hsv)
-		# To avoid division by 0
-		if benchmark_length_px == 0.0:
-			benchmark_length_px = -1
-		print("Benchmark length: " + str(benchmark_length_px))
-
 	# Draw accepted contours in green
 	# Calculate average surface and weight
+	# Update number of recognised larvae after filtering based on contour's roughness
 	nbrRecognisedLarvae = len(cleanedLarvaeContours)
 	if nbrRecognisedLarvae >= MIN_LARVAE_TO_DETECT:
 		# Display cleaned contours in Green
@@ -300,7 +311,7 @@ def process_image():
 				surfacePx = pxSurfaceAreaList[i]
 				weight = weightList[i]
 				(xc, yc, wc, hc) = cv2.boundingRect(larva_contour)
-				cv2.putText(image, "Surface: " + str(round(surfacePx, 2)) + " px^2, ", (xc, yc ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+				#cv2.putText(image, "Surface: " + str(round(surfacePx, 2)) + " px^2, ", (xc, yc ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 				cv2.putText(image, "Surface: " + str(round(surfacePx*mmPerPx**2, 2)) + " mm^2", (xc, yc-13 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 				cv2.putText(image, "Weight: " + str(round(weight, 2)) + " g", (xc, yc-26 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
@@ -313,14 +324,15 @@ def process_image():
 		avgWeight = np.mean(weightList)
 
 		# Display info on the image; avg weight, number of larvae detected
-		cv2.putText(image, "Average weight " + ("(Calibration=benchmark): " if (CALIBRATION == "benchmark") else "(Calibration=direct): ") + str(round(avgWeight, 2)) + " g", (20, 20 ), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1)
-		cv2.putText(image, "Number of larvae identified: " + str(nbrRecognisedLarvae), (20, 40 ), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 1)
+		cv2.putText(image, "Average surface " + str(round(np.mean(pxSurfaceAreaList), 2)) + " px^2", (20, 20 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+		cv2.putText(image, "Average weight " + ("(Calib=benchmark): " if (CALIBRATION == "benchmark") else "(Calibration=direct): ") + str(round(avgWeight, 2)) + " g", (20, 40 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+		cv2.putText(image, "Number of larvae recognised: " + str(nbrRecognisedLarvae), (20, 60 ), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
 		# Print info
 		avgSurface = np.mean(pxSurfaceAreaList)
 		print("Recognised larvae surface list: " + str(pxSurfaceAreaList))
 		print("Recognised larvae weight list: " + str(weightList))
-		print("Number of larvae recognised: " + str(nbrRecognisedLarvae))
+		print(str(nbrRecognisedLarvae) + " larvae recognised")
 		print("Average surface (px^2): " + str(round(avgSurface,2)))
 		print("Average weight (px^2): " + str(round(avgWeight, 2)))
 
@@ -337,16 +349,16 @@ def process_image():
 		else:
 			if CALIBRATION == "benchmark":
 				mmPerPx = BENCHMARK_METRIC_LENGTH / benchmark_length_px
-				row = [str(captureSaveCount), str(ct), str(avgSurface), str(avgSurface*mmPerPx**2), str(avgWeight), str(benchmark_length_px)]
+				row = [str(captureSaveCount), str(ct), str(nbrRecognisedLarvae), str(avgSurface), str(avgSurface*mmPerPx**2), str(avgWeight), str(benchmark_length_px)]
 			else:
-				row = [str(captureSaveCount), str(ct), str(avgSurface), 0, str(avgWeight), str(benchmark_length_px)]
+				row = [str(captureSaveCount), str(ct), str(nbrRecognisedLarvae), str(avgSurface), 0, str(avgWeight)]
 		outputWriter.writerow(row)
 
-		# Save image
-		cv2.imwrite(IMAGE_FOLDER + "/" + str(captureSaveCount) + "-contoured_img.jpg", image)
+		# Save image with contoured larvae
+		cv2.imwrite(IMAGE_FOLDER + "/" + str(captureSaveCount) + "-contoured_larvae.jpg", image)
 
 	else:
-		print("Too few larvae detected, minimum is: " + str(MIN_LARVAE_TO_DETECT))
+		print(str(nbrRecognisedLarvae) + " larvae detected is too few. Minimum is: " + str(MIN_LARVAE_TO_DETECT))
 
 	captureSaveCount = captureSaveCount + 1
 	if captureSaveCount > MAX_CAPTURE_SAVE:
