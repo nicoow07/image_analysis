@@ -4,6 +4,10 @@ This python script is a webserver used to receive images from the data acquisiti
 ## Input
 The webserver is listening POST requests on the route /upload_image for iamges of free falling larvae. The image have to be in the "files" section of the form-data request. A code in Java sending an image with the proper request format is available in the file "image_POST_request_example.java".
 
+The route '/new_capture_session' is a POST type, taking a multiform data as input. The field "capture_session_count" determines the new captures session ID. All images analysed during the same capture session will have their data compiled and output once in the 'logs_sessions.csv' file. You will find the total count, average surface & weight of all larvae analysed during the session.
+
+The route '/close_capture_session' is a GET type. When called, the data gathered during the capture session are saved in the 'logs_sessions.csv' when this route is called. Any further images will not be taken into account in the calculation. But will still be logged in logs.csv and logs.txt
+
 ## Parameters
 The parameters are set in the configuration file, given by the value of the environment variable CONFIG_FILE.
 To change the config file in use, execute this command:
@@ -47,5 +51,10 @@ If no object are detected, no log is added to the files.
 **logs.max_capture_save** = The maximum number of pictures to be saved. The script will overwrite the oldest pictures to save space.
 
 ## Output
+### Files
+**logs_sessions.csv**: Each row is a summary of the data analysed during a capture session.
+Each column mean: Session ID, Image ID, Timestamp, Total recognised larvae, Avg surface, Avg weight
+
+
 ## Image processing algorithm
 ## Processing speed

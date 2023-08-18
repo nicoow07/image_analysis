@@ -27,8 +27,13 @@ LOG_FILE_NAME = "logs"
 IMAGE_FOLDER = "img"
 MAX_CAPTURE_SAVE = 100 # Save the latest pictures 
 
-# Global variable to record the current id of image stored on disk.
+# Global variables to keep between several POST request received
 captureSaveCount = 1 # current count for file name and log matching
+# SESSION variables
+captureSessionCount = 0 # First value to be sent by the image acq app is 1
+currSession_recognisedLarvaeCount = 0 # The total number of larvae detected for the current session
+currSession_totalSurface = 0 # The cumulative surface of recognised larvae for the current session. In px^2
+currSession_totalWeight = 0 # The cumulative weight of recognised larvae for the current session. In g
 
 # Thresholding. Takes as input a single channel image
 # Returns a mask, a binary image.
@@ -159,11 +164,70 @@ loadConfig(conf_file_name)
 
 app = Flask(__name__)
 
+@app.route('/new_capture_session', methods = ['POST'])
+def newCaptureSession():
+	#=====CAPTURE SESSION COUNT RECEPTION=====
+	request_capture_session_count = request.form.get('capture_session_count')
+
+	if request_capture_session_count is None:
+		print("capture_session_count is None")
+		return "capture_session_count not found in the request."
+	print("New capture session num: " + request_capture_session_count)
+
+	# Update & initialise session variables
+	global captureSessionCount
+	global currSession_recognisedLarvaeCount
+	global currSession_totalSurface
+	global currSession_totalWeight
+	captureSessionCount = request_capture_session_count
+	currSession_totalWeight = 0
+	currSession_totalSurface = 0
+	currSession_recognisedLarvaeCount = 0
+
+	return "Session " + str(captureSessionCount) + " opened."
+
+@app.route('/close_capture_session', methods = ['POST','GET'])
+def closeCaptureSession():
+	global captureSaveCount
+	global captureSessionCount
+	global currSession_recognisedLarvaeCount
+	global currSession_totalSurface
+	global currSession_totalWeight
+
+	# Save session variables in log file
+	outputCSVFile = open(LOG_FILE_NAME + "_sessions.csv", 'a')
+	outputWriter = csv.writer(outputCSVFile)
+
+	#Gather the data to write into the file
+	ct = datetime.datetime.now()
+	sessionAvgSurface = 0
+	sessionAvgWeight = 0
+	if currSession_recognisedLarvaeCount > 0:
+		sessionAvgSurface = currSession_totalSurface / currSession_recognisedLarvaeCount
+		sessionAvgWeight = currSession_totalWeight / currSession_recognisedLarvaeCount
+
+	# Print session info
+	print("-----Session " + str(captureSessionCount) + " closed-----")
+	print("Session total larvae count: " + str(currSession_recognisedLarvaeCount))
+	print("Session average surface: " + str(sessionAvgSurface) + " px^2")
+	print("Session average weight: " + str(sessionAvgWeight) + " g")
+
+	row = [str(captureSessionCount), str(captureSaveCount), str(ct), str(currSession_recognisedLarvaeCount), str(sessionAvgSurface), str(sessionAvgWeight)]
+	outputWriter.writerow(row)
+
+	return "Session " + str(captureSessionCount) + " closed."
+
 @app.route('/upload_image', methods = ['POST'])
 def process_image():
 	global captureSaveCount
+	global captureSessionCount
+	global currSession_recognisedLarvaeCount
+	global currSession_totalSurface
+	global currSession_totalWeight
+
 	#=====IMAGE RECEPTION=====
 	if not request.files:
+		print("No image received")
 		return "No image received"
 	file = request.files['image']
 	# convert string of image data to uint8
@@ -178,7 +242,7 @@ def process_image():
 	# Convert the image to hsv
 	hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 	#grey = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-	print("Image shape: " + str(hsv.shape))
+	print("Image No " + str(captureSaveCount) + ", shape: " + str(hsv.shape))
 	valueChannel = hsv[:,:,2]
 
 	# Benchmark recognition
@@ -198,73 +262,17 @@ def process_image():
 		MINIMUM_SURFACE_FILTER = MINIMUM_SURFACE_FILTER * pxPerMm**2
 		MAXIMUM_SURFACE_FILTER = MAXIMUM_SURFACE_FILTER * pxPerMm**2
 
-	#Calc the histogram.
-	hist = cv2.calcHist([valueChannel], [0], None, [256], [0, 256])
-	# Compute a single threshold value based on the histogram
-	localMinIndices = argrelextrema(hist, np.less)[0]
-	if len(localMinIndices) <= 0:
-		return "Flat histogram"
-
-	# Remove some local min of the histogram if too close together
-	localMinIndicesCpy = localMinIndices.copy()
-	prevMinValue = localMinIndices[0]
-	for minVal in localMinIndicesCpy[1:-1]:
-		if minVal - prevMinValue < MIN_THRESHOLD_ITERATION_SPACE:
-			localMinIndices = np.delete(localMinIndices,np.where(localMinIndices == minVal))
-		else:# Only update previous value if it is left in the array
-			prevMinValue = minVal
-
-	# BEST THRESHOLD ASSESSMENT
-	# Assess the number of objects contoured with all minima of histogram as thresholds
-	# Stop iterating when the number of objects starts to decline. Assumption: it will only decline from there on
-	objectsDetectedByThreshold = list()
-	ind = 0
-	lastNbrObjectsDetected = 0
-	currentNbrObjectsDetected = 0
-	backgroundHSVLowRange = np.array([0, 60, 100])
-	backgroundHSVHighRange = np.array([255, 155, 255])
-	print("Thresholds to try: " + str(localMinIndices))
-	# Shortcut the number of threshold to try only when speed is needed: when calibration is direct (meaning free falling larvae)
-	# when CALIBRATION == "benchmark", no shortcut: 
-	while ind < len(localMinIndices) and (lastNbrObjectsDetected <= currentNbrObjectsDetected or CALIBRATION == "benchmark"):
-	#while ind < len(localMinIndices):
-		thresholdVal = localMinIndices[ind]
-		
-		# Threshold the value channel with a window of 30 around the above threshold value
-		backgroundHSVLowRange[0] = max(thresholdVal-15, 0)
-		backgroundHSVHighRange[0] = min(thresholdVal+15, 255)
-		larvaeThresh = hsvThreshold(hsv, backgroundHSVLowRange, backgroundHSVHighRange)
-
-		# Remove noise, and get contours of only relevant objects (which surface is larger than MINIMUM_SURFACE_FILTER)
-		cleanedLarvaeContours = getDenoisedContours(larvaeThresh, MINIMUM_SURFACE_FILTER, MAXIMUM_SURFACE_FILTER)
-
-		# update last nbr of detected objects
-		lastNbrObjectsDetected = currentNbrObjectsDetected
-		# Get current number of detected objects
-		currentNbrObjectsDetected = len(cleanedLarvaeContours)
-		objectsDetectedByThreshold.append(currentNbrObjectsDetected)
-		#print(str(currentNbrObjectsDetected) + " objects detected with threshold " + str(thresholdVal))
-		ind = ind + 1
-
-	# Compute best threshold value
-	bestThreshold = 0
-	if len(objectsDetectedByThreshold) > 0:
-		bestThreshold = localMinIndices[np.argmax(objectsDetectedByThreshold)]
-	print("Best threshold: " + str(bestThreshold))
-
 	# Threshold the value chanel of HSV image with best threshold hue value
-	backgroundHSVLowRange[0] = max(bestThreshold-15, 0)
-	backgroundHSVHighRange[0] = min(bestThreshold+15, 255)
+	backgroundHSVLowRange = np.array([12*255.0/360.0, 0.18*255, 0.22*255])
+	backgroundHSVHighRange = np.array([32*255.0/360.0, 0.48*255, 0.5*255])
 	larvaeThresh = hsvThreshold(hsv, backgroundHSVLowRange, backgroundHSVHighRange)
+	larvaeThresh = 255 - larvaeThresh
 	#larvaeThresh = threshold(valueChannel, bestThreshold)
 
 	# Get again contour with the best threshold
 	cleanedLarvaeContours = getDenoisedContours(larvaeThresh, MINIMUM_SURFACE_FILTER, MAXIMUM_SURFACE_FILTER)
 
 	cv2.imwrite(IMAGE_FOLDER + "/" + str(captureSaveCount) + "-larvae_thresh.jpg", larvaeThresh)
-
-	# Get timestamp for pict names & logs
-	ct = datetime.datetime.now()
 	
 	# Filter contours based on Roughness. Draw removed contours in red
 	nbrRecognisedLarvae = len(cleanedLarvaeContours)
@@ -277,10 +285,10 @@ def process_image():
 			roughness = round(perimeter / cvxHullPerimeter, 2)
 			contourRoughnessList.append(roughness)
 			# Display roughness next to the contour concerned
-			# if roughness > MAX_ROUGHNESS_VALUE:
-			# 	(x, y, w, h) = cv2.boundingRect(contour)
-			# 	cv2.putText(image, "Rg: " + str(roughness), (x, y - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-			# 	cv2.drawContours(image, cleanedLarvaeContours, -1, (0, 0, 255), 2)
+			if roughness > MAX_ROUGHNESS_VALUE:
+				(x, y, w, h) = cv2.boundingRect(contour)
+				cv2.putText(image, "Rg: " + str(roughness), (x, y - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+				cv2.drawContours(image, cleanedLarvaeContours, -1, (0, 0, 255), 2)
 
 		contourRoughnessList = np.array(contourRoughnessList)
 
@@ -336,7 +344,14 @@ def process_image():
 		print("Average surface (px^2): " + str(round(avgSurface,2)))
 		print("Average weight (px^2): " + str(round(avgWeight, 2)))
 
-		#Output logs in file
+		# Add metrics from this capture to the session
+		currSession_recognisedLarvaeCount = currSession_recognisedLarvaeCount + nbrRecognisedLarvae
+		currSession_totalSurface = currSession_totalSurface + sum(pxSurfaceAreaList)
+		currSession_totalWeight = currSession_totalWeight + sum(weightList)
+
+		#Output logs in text file
+		# Get timestamp for pict names & logs
+		ct = datetime.datetime.now()
 		logsFile = open(LOG_FILE_NAME + ".txt", "a")
 		logsFile.write(str(ct) + "-" + str(captureSaveCount) + "-average_surface: " + str(avgSurface) + "\n")
 		logsFile.write(str(ct) + "-" + str(captureSaveCount) + "-average_weight: " + str(avgWeight) + "\n\n")
@@ -344,14 +359,11 @@ def process_image():
 		# Output logs in CSV, with Benchmark length recognised if selected in config
 		outputCSVFile = open(LOG_FILE_NAME + ".csv", 'a')
 		outputWriter = csv.writer(outputCSVFile)
-		if benchmark_length_px == -2:
-			row = [str(captureSaveCount), str(ct), str(avgSurface), 0, str(avgWeight), -2]
+		if CALIBRATION == "benchmark":
+			mmPerPx = BENCHMARK_METRIC_LENGTH / benchmark_length_px
+			row = [str(captureSaveCount), str(ct), str(nbrRecognisedLarvae), str(avgSurface), str(avgSurface*mmPerPx**2), str(avgWeight), str(benchmark_length_px)]
 		else:
-			if CALIBRATION == "benchmark":
-				mmPerPx = BENCHMARK_METRIC_LENGTH / benchmark_length_px
-				row = [str(captureSaveCount), str(ct), str(nbrRecognisedLarvae), str(avgSurface), str(avgSurface*mmPerPx**2), str(avgWeight), str(benchmark_length_px)]
-			else:
-				row = [str(captureSaveCount), str(ct), str(nbrRecognisedLarvae), str(avgSurface), 0, str(avgWeight)]
+			row = [str(captureSaveCount), str(ct), str(nbrRecognisedLarvae), str(avgSurface), 0, str(avgWeight)]
 		outputWriter.writerow(row)
 
 		# Save image with contoured larvae
