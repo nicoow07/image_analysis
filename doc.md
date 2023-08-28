@@ -26,6 +26,8 @@ Threshold is a value between 0 and 255. A value of 20 is recommended to avoid un
 
 **img_processing.min_larvae_to_detect** = The minimum number of larvae to be detected so that the measure is added to the csv file, and the image saved
 
+**img_processing.max_larvae_elongation** = The maximum elongation of a larvae to be accepted. The elongation is the division between the height and the width or the width / height. Elongation is always >= 1
+
 ### Surface - Weight model
 To convert the surface of larvae into a weight, a linear model is used.
 Such as: weight = surface * SURFACIQUE_WEIGHT + Y_INTERCEPT
