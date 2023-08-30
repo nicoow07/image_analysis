@@ -1,0 +1,21 @@
+{
+	"img_processing": {
+		"histogram_min_iteration_span": 15,
+		"minimum_surface_filter": 25,
+		"maximum_surface_filter": 140,
+		"max_roughness_value": 1.07,
+		"min_larvae_to_detect": 0,
+		"max_larvae_elongation": 10
+	},
+	"weight_model":{
+		"calibration": "benchmark",
+		"benchmark_metric_length": 25,
+		"area_weight": 3.32,
+		"y_intercept": -107.31
+	},
+	"logs":{
+		"log_file_name": "logs",
+		"image_folder": "img",
+		"max_capture_save": 100
+	}
+} 
