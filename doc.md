@@ -19,7 +19,7 @@ The parameters of this script are:
 **img_processing.histogram_min_iteration_span** = The minimum value between two threshold values tested to get the best value.
 Threshold is a value between 0 and 255. A value of 20 is recommended to avoid unecessary processing, while having accurate best threshold value determination.
 
-**img_processing.minimum_surface_filter** = The objects detected are filtered based on their surface in pixels^2. This is the lower bound. All objects with a surface lower than this parameter are excluded from the surface and average weight calculation.
+**img_processing.minimum_surface_filter** = The objects detected are filtered based on their surface in pixels^2. This is the lower bound. All objects with a surface lower than this parameter are excluded from the surface and average weight calculation. If calibration is "benchmark", then this value is in mm^2
 **img_processing.maximum_surface_filter** = This is the upper bound of the filter.
 
 **img_processing.max_roughness_value** = The maximum allowed roughness value for a shape to be included in the calculation. The roughness is defined as: perimeter of the contour of the shape / perimeter of the convex hull of the shape.
@@ -55,7 +55,8 @@ If no object are detected, no log is added to the files.
 ## Output
 ### Files
 **logs_sessions.csv**: Each row is a summary of the data analysed during a capture session.
-Each column mean: Session ID, Image ID, Timestamp, Total recognised larvae, Avg surface, Avg weight
+Each column mean: Session ID, Image ID, Timestamp, Total recognised larvae, Avg surface, Avg weight, Surface List.
+Surface list is in px^2 if calibration is "direct", or in mm^2 for "benchmark" calibration
 
 
 ## Image processing algorithm
